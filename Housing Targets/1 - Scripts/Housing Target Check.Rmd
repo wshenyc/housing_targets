@@ -1,0 +1,153 @@
+---
+title: "Housing Target Test"
+output: html_document
+date: "2023-02-02"
+---
+
+#To determine how many NYC CDs would have met
+#Gov Hochul's Housing Compact target of 3% housing growth
+
+Set Up
+```{r}
+library(tidyverse)
+library(janitor)
+library(glue)
+
+url <- "/Users/winnieshen/R Projects/Housing Targets/"
+```
+
+Reading in Data
+```{r}
+hdb <- read_csv(glue('{url}', "/2 - Raw Data/HDB22Q2.csv")) %>% 
+  janitor::clean_names() %>% 
+  filter(permit_year > 2009 &
+           is.na(job_inactive) &
+           job_status != "9. Withdrawn")
+
+census <- read_csv(glue('{url}',"/2 - Raw Data/nyc_census_housing.csv"))
+
+census <- census %>% 
+  janitor::clean_names() %>% 
+  filter(geo_type == "CD") %>% 
+  select(geo_id, 
+         h_units_10) %>% 
+  mutate(geo_id = as.numeric(geo_id))
+
+crosswalk <- read_csv(glue('{url}',"/2 - Raw Data/CD_PUMA_SBA_Crosswalk (1).csv")) %>% 
+  select(CD_2,
+         CD_Geography) %>% 
+  filter(!is.na(CD_2))
+```
+
+#manually checking missing CDs and instances where HNY units are greater than class A net
+```{r}
+hdb_check <- hdb %>% 
+  filter(classa_hnyaff > classa_net |
+         is.na(comunitydist)) %>% 
+      select(job_number, 
+         job_type,
+         job_status,
+         complete_year,
+         permit_year,
+         classa_net,
+         classa_hnyaff,
+         bin,
+         bbl,
+         address_numbr,
+         address_st,
+         comunitydist,
+         latitude,
+         longitude
+         ) 
+```
+
+
+#fixing values
+```{r}
+hdb_cleaned <- hdb %>% 
+    select(job_number, 
+         job_type,
+         job_status,
+         complete_year,
+         permit_year,
+         classa_net,
+         classa_hnyaff,
+         bin,
+         bbl,
+         address_numbr,
+         address_st,
+         comunitydist,
+         latitude,
+         longitude
+         ) 
+
+#units 
+hdb_cleaned[hdb_cleaned$job_number==420663589, "classa_hnyaff"] <- 231 ##this job had 919 HNY units even though only 231 units constructed
+#cross checked with HPD's HNY data by BBL and confirmed only 231 units were counted towards
+#HNY goal 
+hdb_cleaned[hdb_cleaned$job_number==3045860201 , "classa_hnyaff"] <- 422
+
+vals <- hdb_check$job_number
+
+hdb_cleaned <- hdb_cleaned %>% 
+  mutate(classa_net = ifelse(job_number %in% vals & !is.na(classa_hnyaff), classa_hnyaff, classa_net))
+
+#missing CD 
+hdb_cleaned[hdb_cleaned$job_number==421742396, "comunitydist"] <- 414
+hdb_cleaned[hdb_cleaned$job_number==104893929, "comunitydist"] <- 110
+hdb_cleaned[hdb_cleaned$job_number==302048013, "comunitydist"] <- 303
+hdb_cleaned[hdb_cleaned$job_number==121473208, "comunitydist"] <- 103
+hdb_cleaned[hdb_cleaned$job_number==320177688, "comunitydist"] <- 313
+
+#some records in 2012 were falsely assigned to CD 595 instead of 503
+hdb_cleaned <- hdb_cleaned %>% 
+  mutate(comunitydist = ifelse(comunitydist == 595, 503, comunitydist))
+
+```
+
+#Counting units permitted for non-overlapping 3-year periods from 2010-2018
+#2010-2012, 2013-2015, 2016-2018
+#HNY units are counted twice
+```{r}
+target_lists <- list() 
+j = 1
+
+for (i in c(2010, 2013, 2016)) {
+  target_lists[[j]] <- 
+  #assign(paste0("year",i,"thru",i+2), 
+         hdb_cleaned %>% 
+    filter(permit_year >= i & permit_year <= i+2) %>% 
+      mutate(classa_hnyaff = ifelse(is.na(classa_hnyaff), 0, classa_hnyaff),
+         classa_minhny = classa_net - classa_hnyaff,
+         classa_affdoub = classa_minhny + (2 * classa_hnyaff)) %>% 
+  group_by(comunitydist) %>% 
+  summarize(
+    total_classa = sum(classa_minhny),
+    total_aff = sum(classa_hnyaff),
+    total_target_units = sum(classa_affdoub)) %>% 
+left_join(census, by = c("comunitydist"= "geo_id")) %>% 
+  left_join(crosswalk, by =c("comunitydist"="CD_2")) %>% 
+  mutate(target_three_pct = round(h_units_10 * 0.03, 0),
+         pct_growth = round((total_target_units) / h_units_10 * 100,2),
+         meet_target_check = ifelse(total_target_units >= target_three_pct, 1, 0),
+         meet_target_yn = ifelse(meet_target_check == 0, "No", "Yes"),
+         time_period = glue(i,"-",i+2)) %>% 
+      select(comunitydist, CD_Geography, h_units_10, 
+         target_three_pct, 
+         total_classa,
+         total_aff,
+         total_target_units, pct_growth, meet_target_check, meet_target_yn,
+         time_period) 
+    #advancing
+  j <- j+1
+ # )
+}
+
+```
+
+#Writing output to excel workbook 
+```{r}
+library(openxlsx)
+
+write.xlsx(target_lists, glue('{url}',"/3 - Outputs/output_v2.xlsx"))
+```

@@ -1,0 +1,86 @@
+---
+title: "Housing Target Maps"
+output: html_document
+date: "2023-02-06"
+---
+
+
+#Making Maps
+```{r}
+library(ggplot2)
+library(sf)
+library(RColorBrewer)
+library(glue)
+
+url <- "/Users/winnieshen/R Projects/Housing Targets/"
+```
+
+```{r}
+#cd shapefile
+cd <- sf::read_sf(glue('{url}',"/2 - Raw Data/Community Districts (1).geojson"))
+```
+
+```{r}
+#joining with shapefile
+clean_up <- function(x) {
+  x %>% 
+  data.frame() %>% 
+  rename(boro_cd = comunitydist) %>% 
+    mutate(boro_cd = as.character(boro_cd)) %>% 
+    left_join(cd, by = 'boro_cd') 
+}
+
+
+for (i in 1:length(target_lists)) {
+  assign(paste0("df", i),
+         target_lists[[i]] %>% 
+           clean_up()
+  )
+}
+
+```
+
+```{r}
+maps <- function(data, x){
+  data$bins <- cut(data$pct_growth,breaks = c(-1, 0, 1, 3, 10, 25),
+                  labels = c("<0", "0-1","1-3","3-10","10+"))
+  cols <- c("<0" = "#9B1D20", "0-1" = "#e76f51", "1-3" = "#e9c46a", "3-10" = "#2a9d8f", "10+" = "#264653")
+  
+ggplot(data) +
+    geom_sf(aes(geometry = {{x}}, fill = bins)) +
+     scale_fill_manual(
+      values = cols,
+      aesthetics = "fill",
+     na.value = "grey95"
+    ) +
+    theme_bw() +
+    theme(
+      axis.line = element_blank(),
+      plot.background = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.border = element_blank(),
+      axis.text.x=element_blank(), 
+      axis.ticks.x=element_blank(), 
+      axis.text.y=element_blank(),  
+      axis.ticks.y=element_blank(),
+      ) +
+    guides(fill=guide_legend(title="Housing Growth Rates")) +
+    ggtitle(paste(data$time_period, "Permitted Housing Units"))
+}
+```
+
+
+```{r}
+maps(df1, geometry)
+
+```
+
+```{r}
+maps(df2, geometry)
+```
+
+```{r}
+maps(df3, geometry)
+```
+
